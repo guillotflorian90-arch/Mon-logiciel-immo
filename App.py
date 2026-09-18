@@ -2,26 +2,14 @@ import streamlit as st
 import pandas as pd
 import requests
 
-# 1. CONFIGURATION ÉCRAN & DESIGN
 st.set_page_config(page_title="ImmoAnalyse Privé", page_icon="🏢", layout="wide")
-
-st.markdown("""
-    <style>
-    .main { background-color: #f8f9fa; }
-    .stTabs [data-baseweb="tab"] { font-size: 16px; font-weight: bold; }
-    div[data-testid="stMetricValue"] { font-size: 24px !important; font-weight: 700; color: #1E3A8A; }
-    .card-calculs { background-color: #ffffff; padding: 20px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 15px; }
-    </style>
-""", unsafe_allow_html=True)
 
 PASSWORD_CIBLE = "BellaCoola28*"
 
 if "authentifie" not in st.session_state:
     st.session_state["authentifie"] = False
 
-# ÉCRAN DE CONNEXION SÉCURISÉ
 if not st.session_state["authentifie"]:
-    st.markdown("<br><br>", unsafe_allow_html=True)
     st.subheader("🏢 Application Privée d'Analyse Immobilière")
     mdp_saisi = st.text_input("Veuillez saisir le mot de passe secret :", type="password")
     if st.button("🔓 Déverrouiller l'accès"):
@@ -32,172 +20,72 @@ if not st.session_state["authentifie"]:
             st.error("Mot de passe incorrect.")
     st.stop()
 
-# FONCTION CONNECTEUR : RECHERCHE DES INFOS DE VILLE VIA API ÉTAT
 def obtenir_infos_marche(nom_ville, type_propriete):
     try:
-        # Nettoyage du nom pour l'API
-        nom_propre = nom_ville.strip()
-        url_geo = f"https://api.gouv.fr{nom_propre}&limit=5&fields=code,population,codeDepartement"
+        url_geo = f"https://api.gouv.fr{nom_ville.strip()}&limit=1&fields=code,population,codeDepartement"
         reponse_geo = requests.get(url_geo, timeout=5).json()
+        if not reponse_geo: return None
         
-        if not reponse_geo:
-            return None
-            
-        # On prend la première correspondance exacte ou la plus proche
-        commune_trouvee = reponse_geo[0]
-        code_insee = commune_trouvee['code']
-        code_dept = commune_trouvee['codeDepartement']
-        pop = commune_trouvee.get('population', 0)
+        commune = reponse_geo[0]
+        pop = commune.get('population', 0)
+        code_dept = commune['codeDepartement']
         
-        # Calibrage statistique des prix (DVF)
-        facteur_taille = 1.2 if pop > 100000 else (1.0 if pop > 20000 else 0.8)
-        prix_base_m2 = 4500 * facteur_taille if type_propriete == "Appartement" else 4900 * facteur_taille
+        f_taille = 1.2 if pop > 100000 else (1.0 if pop > 20000 else 0.8)
+        prix_base = 4500 * f_taille if type_propriete == "Appartement" else 4900 * f_taille
         
-        # Ajustements régionaux spécifiques
-        if code_dept in ['75', '92', '93', '94']: prix_base_m2 *= 2.1
-        elif code_dept in ['06', '13', '83']: prix_base_m2 *= 1.25
-        elif code_dept in ['33', '69', '44']: prix_base_m2 *= 1.15
+        if code_dept in ['75', '92', '93', '94']: prix_base *= 2.1
+        elif code_dept in ['06', '13', '83']: prix_base *= 1.25
         
-        prix_moyen = int(prix_base_m2)
-        prix_bas = int(prix_moyen * 0.75)
-        prix_haut = int(prix_moyen * 1.45)
-        
-        return {
-            "nom": commune_trouvee['nom'],
-            "prix_moyen": prix_moyen,
-            "prix_bas": prix_bas,
-            "prix_haut": prix_haut,
-            "population": pop,
-            "code_dept": code_dept
-        }
-    except:
-        return None
+        pm = int(prix_base)
+        return {"nom": commune['nom'], "pm": pm, "pb": int(pm*0.75), "ph": int(pm*1.45), "pop": pop, "dept": code_dept}
+    except: return None
 
-# 2. LOGICIEL PRINCIPAL DÉVERROUILLÉ
 st.title("📊 Assistant Immobilier National")
+o1, o2 = st.tabs(["🔍 1. Base Nationale", "🏗️ 2. Simulateur"])
 
-onglet1, onglet2 = st.tabs(["🔍 1. Connecteur API & Marché Référent", "🏗️ 2. Simulateur Achat-Revente"])
+if "infos" not in st.session_state:
+    st.session_state["infos"] = {"nom": "Nice", "pm": 4850, "pb": 3300, "ph": 7200, "pop": 340000, "dept": "06"}
 
-# Initialisation des variables de session si elles n'existent pas
-if "infos_commune" not in st.session_state:
-    st.session_state["infos_commune"] = {
-        "nom": "Nice", "prix_moyen": 4850, "prix_bas": 3300, "prix_haut": 7200, "population": 340000, "code_dept": "06"
-    }
-
-# ==========================================
-# ONGLET 1 : COMPARAISON MARCHÉ & CONNECTEUR AUTOMATIQUE
-# ==========================================
-with onglet1:
-    col_scan, col_tableau = st.columns([1, 1.3])
+with o1:
+    v_saisie = st.text_input("Ville :", value="Nice")
+    t_bien = st.selectbox("Type :", ["Appartement", "Maison"])
+    if st.button("🚀 Interroger les bases"):
+        res = obtenir_infos_marche(v_saisie, t_bien)
+        if res: st.session_state["infos"] = res
+        else: st.error("Ville introuvable.")
     
-    with col_scan:
-        st.subheader("🎯 Scanner une Commune de France")
-        ville_saisie = st.text_input("Entrez le nom de la ville :", value="Nice")
-        type_bien = st.selectbox("Type de propriété :", ["Appartement", "Maison"])
-        budget_max = st.number_input("Budget Maximum (€) :", value=300000, step=10000)
-        surface_min = st.number_input("Surface Minimum (m²) :", value=50, step=5)
-        
-        st.markdown("**Connecteurs API Actifs :** `geo.api.gouv.fr` | `data.gouv.fr (DVF)`")
-        recherche_lancee = st.button("🚀 Interroger les bases nationales", use_container_width=True)
-        
-        if recherche_lancee:
-            with st.spinner("Recherche de la ville en cours..."):
-                resultat = obtenir_infos_marche(ville_saisie, type_bien)
-                if resultat:
-                    st.session_state["infos_commune"] = resultat
-                    st.toast(f"Ville de {resultat['nom']} chargée !", icon="✅")
-                else:
-                    st.error("Ville introuvable. Essayez d'écrire le nom sans accent ou vérifiez l'orthographe.")
-        
-    with col_tableau:
-        st.subheader("📈 Données Réelles récupérées par l'API")
-        
-        infos = st.session_state["infos_commune"]
-        
-        # Grille analytique basée sur la session en cours
-        data_market = {
-            "Indicateur Officiel": ["Commune sélectionnée", "Prix Moyen / m²", "Prix BAS estimé", "Prix HAUT estimé", "Population Totale", "Département"],
-            "Données en Temps Réel": [str(infos['nom']), f"{infos['prix_moyen']:,} €", f"{infos['prix_bas']:,} €", f"{infos['prix_haut']:,} €", f"{infos['population']:,} hab.", f"N° {infos['code_dept']}"]
-        }
-        df_market = pd.DataFrame(data_market)
-        st.dataframe(df_market, use_container_width=True, hide_index=True)
-        
-        if recherche_lancee and resultat:
-            st.markdown("---")
-            st.subheader(f"💡 Analyse de marché : {infos['nom']}")
-            prix_m2_cible = int(infos['prix_moyen'] * 0.9)
-            st.info(f"Pour votre budget de {budget_max:,} € à {infos['nom']}, ciblez un bien d'au moins {surface_min} m² affiché sous la barre des {int(infos['prix_moyen'] * surface_min):,} € pour acheter sous le prix moyen du marché.")
+    inf = st.session_state["infos"]
+    df = pd.DataFrame({
+        "Indicateur": ["Ville", "Prix Moyen / m²", "Prix BAS", "Prix HAUT", "Population"],
+        "Données": [inf['nom'], f"{inf['pm']:,} €", f"{inf['pb']:,} €", f"{inf['ph']:,} €", f"{inf['pop']:,} hab."]
+    })
+    st.dataframe(df, use_container_width=True, hide_index=True)
 
-# ==========================================
-# ONGLET 2 : SIMULATEUR FINANCIER & TRAVAUX
-# ==========================================
-with onglet2:
-    st.subheader("🏗️ Calculateur de Marge Opérationnelle")
-    st.caption("🔒 Régime : Résidence Principale en Nom Propre (Exonération totale d'impôt sur la plus-value)")
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    col_inputs, col_outputs = st.columns([1, 1.1])
+with o2:
+    st.subheader("🏗️ Calculateur (Résidence Principale)")
+    p_achat = st.number_input("Prix d'achat (€) :", value=200000, step=5000)
+    f_notaire = int(p_achat * 0.075)
+    st.write(f"🔹 Frais de notaire (7.5%) : {f_notaire:,} €")
     
-    with col_inputs:
-        st.markdown("<div class='card-calculs'>", unsafe_allow_html=True)
-        st.markdown("#### 💵 1. Prix & Frais d'Achat")
-        p_achat = st.number_input("Prix d'achat du bien (€) :", value=200000, step=5000)
+    m_travaux = st.radio("Travaux :", ["Forfait au m²", "Montant exact"])
+    if m_travaux == "Forfait au m²":
+        surf = st.number_input("Surface (m²) :", value=50)
+        conf = st.selectbox("Finition :", ["Léger (300€/m²)", "Standard (750€/m²)", "Lourd (1300€/m²)"])
+        r = 300 if "Léger" in conf else (750 if "Standard" in conf else 1300)
+        c_trav = surf * r
+    else:
+        c_trav = st.number_input("Montant Devis TTC (€) :", value=25000)
         
-        frais_notaire = int(p_achat * 0.075)
-        st.info(f"Frais de notaire légaux (Ancien - 7.5%) : **{frais_notaire :,} €**")
-        frais_agence = st.number_input("Honoraires d'agence ou de chasseur (€) :", value=0, step=1000)
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-        st.markdown("<div class='card-calculs'>", unsafe_allow_html=True)
-        st.markdown("#### 🔨 2. Enveloppe Travaux")
-        methode_travaux = st.radio("Méthode d'évaluation des travaux :", ["Estimation rapide au m²", "Montant exact (Devis artisan)"])
-        
-        if methode_travaux == "Estimation rapide au m²":
-            surface_travaux = st.number_input("Surface totale à rénover (m²) :", value=50, step=5)
-            choix_renov = st.selectbox(
-                "Niveau de finition souhaité :",
-                ["Rafraîchissement léger (300 €/m²)", 
-                 "Rénovation complète / Standard (750 €/m²)", 
-                 "Rénovation lourde / Restructuration (1 300 €/m²)"]
-            )
-            ratio_m2 = 300 if "léger" in choix_renov else (750 if "Standard" in choix_renov else 1300)
-            cout_travaux_brut = surface_travaux * ratio_m2
-        else:
-            cout_travaux_brut = st.number_input("Montant total du devis artisan TTC (€) :", value=25000, step=1000)
-        
-        pct_securite = st.slider("Marge de sécurité pour imprévus (%) :", 0, 20, 10 if methode_travaux == "Estimation rapide au m²" else 0)
-        cout_travaux_total = int(cout_travaux_brut * (1 + pct_securite / 100))
-        st.markdown(f"Budget travaux retenu : **{cout_travaux_total :,} €**")
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-        st.markdown("<div class='card-calculs'>", unsafe_allow_html=True)
-        st.markdown("#### ⏳ 3. Frais de Portage & Revente")
-        frais_portage = st.number_input("Frais de portage (Crédit, Taxe Foncière, Copropriété) (€) :", value=4000, step=500)
-        p_revente = st.number_input("Prix de revente estimé (€) :", value=320000, step=5000)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with col_outputs:
-        total_sorties = p_achat + frais_notaire + frais_agence + cout_travaux_total + frais_portage
-        marge_nette = p_revente - total_sorties
-        rendement_operation = (marge_nette / total_sorties) * 100 if total_sorties > 0 else 0
-        
-        st.markdown("### 📊 Synthèse Financière (Net d'Impôt)")
-        
-        if rendement_operation >= 20.0:
-            st.success(f"🟢 **OPÉRATION VALIDÉE !** Votre gain net est de **{rendement_operation:.1f}%**, ce qui dépasse votre objectif minimal de 20.0%.")
-        else:
-            st.error(f"🔴 **OBJECTIF NON ATTEINT.** La rentabilité ressort à **{rendement_operation:.1f}%**. L'opération est en dessous de vos 20.0% cibles.")
-            
-        m1, m2 = st.columns(2)
-        with m1:
-            st.metric(label="💰 Coût Total de l'Opération", value=f"{total_sorties :,} €")
-        with m2:
-            st.metric(label="💶 Marge Nette (Dans votre poche)", value=f"{marge_nette :,} €")
-            
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.metric(label="📈 Pourcentage de Profit Net", value=f"{rendement_operation:.1f} %")
-            
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("#### 📋 Détail du coût de revient :")
-        
-        donnees_recap = {
+    p_revente = st.number_input("Prix de revente estimé (€) :", value=320000)
+    
+    total_sorties = p_achat + f_notaire + int(c_trav * 1.1) + 4000
+    marge = p_revente - total_sorties
+    rendement = (marge / total_sorties) * 100 if total_sorties > 0 else 0
+    
+    st.markdown("---")
+    st.metric("💰 Coût Opération", f"{total_sorties:,} €")
+    st.metric("💶 Marge Net d'Impôt", f"{marge:,} €")
+    st.metric("📈 Profit", f"{rendement:.1f} %")
+    
+    if rendement >= 20.0: st.success("🟢 PROJET VALIDÉ (Supérieur à 20%)")
+    else: st.error("🔴 SOUS LES 20% CIBLES")
