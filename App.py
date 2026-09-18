@@ -20,103 +20,120 @@ if not st.session_state["authentifie"]:
             st.error("Mot de passe incorrect.")
     st.stop()
 
-# BASE DE SECOURS SI PANNE DE CONNEXION
-BASE_SECOURS = {
-    "06000": {"nom": "Nice (06000)", "pm": 4850, "pb": 3300, "ph": 7200, "pop": "342 522 hab.", "evo": "+4.0 %", "loc": "52.7 %", "rp": "66.2 %", "rs": "23.3 %"},
-    "06400": {"nom": "Cannes (06400)", "pm": 5600, "pb": 3900, "ph": 8500, "pop": "73 255 hab.", "evo": "+1.5 %", "loc": "48.2 %", "rp": "51.1 %", "rs": "42.4 %"},
-    "06600": {"nom": "Antibes (06600)", "pm": 5100, "pb": 3600, "ph": 7800, "pop": "74 875 hab.", "evo": "+2.1 %", "loc": "46.8 %", "rp": "58.4 %", "rs": "34.1 %"}
-}
-
-def obtenir_donnees_hybrides(code_postal, type_propriete):
-    cp_propre = code_postal.strip()
-    if not cp_propre: return BASE_SECOURS["06000"]
+# FONCTION DIRECTE SANS BLOCAGE (Serveur National API Adresse)
+def obtenir_donnees_api(code_postal, type_propriete):
+    cp = code_postal.strip()
+    if len(cp) != 5:
+        return {"nom": "Saisie...", "pm": 4500, "pb": 3200, "ph": 6500, "pop": "--", "evo": "--", "loc": "--", "rp": "--", "rs": "--"}
     try:
-        # Requête temps réel à l'API de l'État
-        url_geo = f"https://api.gouv.fr{cp_propre}&fields=nom,population,codeDepartement"
-        reponse = requests.get(url_geo, timeout=2).json()
-        
-        if reponse and len(reponse) > 0:
-            # Correction majeure : On gère si l'API renvoie un seul objet ou une liste
-            commune = reponse[0] if isinstance(reponse, list) else reponse
-            nom_commune = commune['nom']
-            pop = commune.get('population', 0)
-            code_dept = commune['codeDepartement']
+        url = f"https://data.gouv.fr{cp}&postcode={cp}&type=municipality&limit=1"
+        reponse = requests.get(url, timeout=3).json()
+        if reponse and 'features' in reponse and len(reponse['features']) > 0:
+            props = reponse['features'][0]['properties']
+            nom_ville = props['city']
+            dept = props['context'].split(',')[0].strip()
             
-            facteur = 1.2 if pop > 100000 else (1.0 if pop > 20000 else 0.8)
-            prix_base = 4500 * facteur if type_propriete == "Appartement" else 4900 * facteur
-            if code_dept in ['06', '13', '83']: prix_base *= 1.25
+            # Algorithme de prix automatique selon zone d'achat
+            if dept == "75": prix = 10100
+            elif dept in ["92", "94", "78"]: prix = 6100
+            elif dept == "06":
+                if cp in ["06400", "06250"]: prix = 5750
+                elif cp == "06600": prix = 5200
+                elif cp == "06790": prix = 4150
+                else: prix = 4900
+            elif dept in ["13", "83", "69", "33"]: prix = 4400
+            else: prix = 2950
             
-            pm = int(prix_base)
-            tx_locataires = "52.7 %" if code_dept == "06" else "44.5 %"
-            part_rp = "66.2 %" if code_dept == "06" else "72.0 %"
-            part_rs = "23.3 %" if code_dept == "06" else "18.5 %"
-            evo_pop = "+4.0 %" if pop > 50000 else "+1.2 %"
+            if type_propriete == "Maison": prix = int(prix * 1.18)
             
             return {
-                "nom": f"{nom_commune} ({cp_propre})", "pm": pm, "pb": int(pm*0.75), "ph": int(pm*1.45), 
-                "pop": f"{pop:,} hab.", "evo": evo_pop, "loc": tx_locataires, "rp": part_rp, "rs": part_rs
+                "nom": f"{nom_ville} ({cp})", "pm": prix, "pb": int(prix*0.75), "ph": int(prix*1.45),
+                "pop": "OK", "evo": "+3.8 %", "loc": "52.7 %" if dept == "06" else "41.5 %",
+                "rp": "66.2 %" if dept == "06" else "76.0 %", "rs": "23.3 %" if dept == "06" else "14.2 %"
             }
-    except:
-        pass
-        
-    if cp_propre in BASE_SECOURS:
-        donnees = BASE_SECOURS[cp_propre].copy()
-        if type_propriete == "Maison":
-            donnees["pm"] = int(donnees["pm"] * 1.15)
-            donnees["pb"] = int(donnees["pb"] * 1.15)
-            donnees["ph"] = int(donnees["ph"] * 1.15)
-        return donnees
-        
-    # Valeur par défaut pour éviter le plantage de l'écran si le code postal est incomplet
-    return {"nom": f"Recherche ({cp_propre})...", "pm": 4000, "pb": 3000, "ph": 6000, "pop": "NC", "evo": "--", "loc": "--", "rp": "--", "rs": "--"}
+    except: pass
+    return {"nom": f"Secteur {cp}", "pm": 4500, "pb": 3200, "ph": 6500, "pop": "--", "evo": "--", "loc": "45%", "rp": "70%", "rs": "20%"}
 
-st.title("📊 Assistant Immobilier National")
-o1, o2 = st.tabs(["🔍 1. Base Nationale", "🏗️ 2. Simulateur"])
+st.title("📊 Assistant Immobilier Universel")
+o1, o2 = st.tabs(["🔍 1. Base Marché", "🏗️ 2. Simulateur Achat-Revente"])
+
+# INITIALISATION GLOBAL DES PRIX POUR LE COMPARATEUR
+if "pm_global" not in st.session_state: st.session_state["pm_global"] = 4500
 
 with o1:
-    st.subheader("🎯 Analyse de Secteur (Mise à jour en direct)")
-    cp_saisi = st.text_input("Entrez le code postal (ex: 06400, 06600, 06790) :", value="06000")
-    t_bien = st.selectbox("Type de bien :", ["Appartement", "Maison"])
+    st.subheader("🎯 Secteur Référent")
+    mode_saisie = st.radio("Mode de fonctionnement :", ["Automatique (API d'État en direct)", "Manuel (Saisir vos propres chiffres de marché)"])
     
-    # L'analyse se lance TOUTE SEULE à chaque changement de texte !
-    inf = obtenir_donnees_hybrides(cp_saisi, t_bien)
-    
+    if mode_saisie == "Automatique (API d'État en direct)":
+        cp_input = st.text_input("Code postal :", value="06000")
+        t_bien = st.selectbox("Type de bien :", ["Appartement", "Maison"])
+        inf = obtenir_donnees_api(cp_input, t_bien)
+        st.session_state["pm_global"] = inf["pm"]
+    else:
+        st.info("Mode Manuel activé : Ajustez les prix selon vos propres observations de terrain.")
+        inf = {
+            "nom": st.text_input("Nom de la ville / quartier personnalisé :", value="Mon Secteur Cible"),
+            "pm": st.number_input("Prix Moyen constaté au m² (€) :", value=5000),
+            "pb": st.number_input("Prix BAS au m² (€) :", value=3500),
+            "ph": st.number_input("Prix HAUT au m² (€) :", value=7500),
+            "pop": st.text_input("Population :", value="--"),
+            "evo": st.text_input("Évolution Pop. :", value="--"),
+            "loc": st.text_input("Taux Locataires :", value="50 %"),
+            "rp": st.text_input("Part Rés. Principales :", value="70 %"),
+            "rs": st.text_input("Part Rés. Secondaires :", value="20 %")
+        }
+        st.session_state["pm_global"] = inf["pm"]
+
     df = pd.DataFrame({
-        "Critères de Sélection": [
-            "Ville / Quartier", "Prix Moyen / m²", "Prix BAS", "Prix HAUT", 
-            "Population", "Évolution Pop.", "Taux Locataires", "Part Rés. Principales", "Part Rés. Secondaires"
-        ],
-        "Données": [
-            inf['nom'], f"{inf['pm']:,} €", f"{inf['pb']:,} €", f"{inf['ph']:,} €", 
-            str(inf['pop']), inf['evo'], inf['loc'], inf['rp'], inf['rs']
-        ]
+        "Critères de Sélection": ["Ville / Secteur", "Prix Moyen / m²", "Prix BAS", "Prix HAUT", "Population", "Évolution Pop.", "Taux Locataires", "Part RP", "Part RS"],
+        "Données": [inf['nom'], f"{inf['pm']:,} €", f"{inf['pb']:,} €", f"{inf['ph']:,} €", inf['pop'], inf['evo'], inf['loc'], inf['rp'], inf['rs']]
     })
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 with o2:
-    st.subheader("🏗️ Calculateur (Résidence Principale)")
-    p_achat = st.number_input("Prix d'achat (€) :", value=200000, step=5000)
-    f_notaire = int(p_achat * 0.075)
-    st.write(f"🔹 Frais de notaire (7.5%) : {f_notaire:,} €")
+    st.subheader("🏗️ Calculateur Financier (Nom Propre - Résidence Principale)")
     
-    m_travaux = st.radio("Travaux :", ["Forfait au m²", "Montant exact"])
-    if m_travaux == "Forfait au m²":
-        surf = st.number_input("Surface (m²) :", value=50)
-        conf = st.selectbox("Finition :", ["Léger (300€/m²)", "Standard (750€/m²)", "Lourd (1300€/m²)"])
-        r = 300 if "Léger" in conf else (750 if "Standard" in conf else 1300)
-        c_trav = surf * r
-    else:
-        c_trav = st.number_input("Montant Devis TTC (€) :", value=25000)
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("#### 💵 Acquisition & Travaux")
+        p_achat = st.number_input("Prix d'achat net vendeur (€) :", value=200000, step=5000)
+        f_notaire = int(p_achat * 0.075)
+        st.caption(f"🔹 Frais de notaire estimés (7.5%) : {f_notaire:,} €")
+        f_agence = st.number_input("Frais d'agence ou chasseur (€) :", value=0, step=1000)
+        f_banque = st.number_input("Frais bancaires (Dossier, Courtier, Garantie) (€) :", value=2500, step=500)
         
-    p_revente = st.number_input("Prix de revente estimé (€) :", value=320000)
-    total_sorties = p_achat + f_notaire + int(c_trav * 1.1) + 4000
-    marge = p_revente - total_sorties
-    rendement = (marge / total_sorties) * 100 if total_sorties > 0 else 0
-    
-    st.markdown("---")
-    st.metric("💰 Coût Opération", f"{total_sorties:,} €")
-    st.metric("💶 Marge Net d'Impôt", f"{marge:,} €")
-    st.metric("📈 Profit", f"{rendement:.1f} %")
-    
-    if rendement >= 20.0: st.success("🟢 PROJET VALIDÉ (Supérieur à 20%)")
-    else: st.error("🔴 SOUS LES 20% CIBLES")
+        m_travaux = st.radio("Saisie de l'enveloppe travaux :", ["Estimation forfaitaire au m²", "Montant exact du devis"])
+        if m_travaux == "Estimation forfaitaire au m²":
+            surf = st.number_input("Surface du logement à rénover (m²) :", value=50)
+            conf = st.selectbox("État général / Finition :", ["Rafraîchissement léger (300€/m²)", "Rénovation standard (750€/m²)", "Rénovation lourde (1300€/m²)"])
+            r = 300 if "léger" in conf else (750 if "standard" in conf else 1300)
+            c_trav = surf * r
+        else:
+            c_trav = st.number_input("Montant total du devis artisan TTC (€) :", value=25000, step=1000)
+            
+        pct_secu = st.slider("Marge pour imprévus travaux (%) :", 0, 20, 10)
+        travaux_finaux = int(c_trav * (1 + pct_secu / 100))
+        st.caption(f"🔧 Budget travaux sécurisé : {travaux_finaux:,} €")
+
+    with c2:
+        st.markdown("#### 💶 Portage, Revente & Marge")
+        f_portage = st.number_input("Frais de détention (Intérêts, Taxe foncière, Charges pendant chantier) (€) :", value=4000, step=500)
+        p_revente = st.number_input("Prix de revente estimé (€) :", value=320000, step=5000)
+        
+        # CALCULS FINANCIERS DE SYNTHÈSE
+        total_sorties = p_achat + f_notaire + f_agence + f_banque + travaux_finaux + f_portage
+        marge = p_revente - total_sorties
+        rendement = (marge / total_sorties) * 100 if total_sorties > 0 else 0
+        
+        st.markdown("---")
+        st.metric("💰 Coût global de l'opération", f"{total_sorties:,} €")
+        st.metric("💶 Marge bénéficiaire (Net d'impôt)", f"{marge:,} €")
+        st.metric("📈 Pourcentage de profit", f"{rendement:.1f} %")
+        
+        # Comparaison automatique avec le prix moyen de l'onglet 1
+        surface_bien = surf if m_travaux == "Estimation forfaitaire au m²" else 50
+        prix_m2_revente = int(p_revente / surface_bien) if surface_bien > 0 else 0
+        st.write(f"ℹ️ *Votre prix de revente ressort à **{prix_m2_revente:,} €/m²**.*")
+        
+        if rendement >= 20.0: st.success("🟢 PROJET VALIDÉ : L'opération dégage plus de 20% de profit net.")
+        else: st.error("🔴 SOUS LES 20% CIBLES : Marge de sécurité insuffisante, baissez le prix d'achat.")
