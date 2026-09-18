@@ -22,26 +22,30 @@ if not st.session_state["authentifie"]:
 
 def obtenir_infos_marche(nom_ville, type_propriete):
     try:
-        # Requête Géo API de l'État
+        # Requête à l'API Géo de l'État
         url_geo = f"https://api.gouv.fr{nom_ville.strip()}&fields=code,population,codeDepartement&limit=5"
         reponse_geo = requests.get(url_geo, timeout=5).json()
-        if not reponse_geo or len(reponse_geo) == 0: return None
         
-        # On extrait la première commune de la liste (règle le bug d'Antibes)
+        # SÉCURITÉ FIXE : Si l'API ne renvoie rien ou une liste vide
+        if not reponse_geo or len(reponse_geo) == 0: 
+            return None
+        
+        # CORRECTION DÉFINITIVE : On extrait le premier élément [0] de la liste de résultats
         commune = reponse_geo[0]
         pop = commune.get('population', 0)
         code_dept = commune['codeDepartement']
         
-        # Calcul statistique dynamique des fourchettes immobilières
+        # Calcul des prix selon la taille de la commune
         f_taille = 1.2 if pop > 100000 else (1.0 if pop > 20000 else 0.8)
         prix_base = 4500 * f_taille if type_propriete == "Appartement" else 4900 * f_taille
         
+        # Ajustement des zones tendues
         if code_dept in ['75', '92', '93', '94']: prix_base *= 2.1
         elif code_dept in ['06', '13', '83']: prix_base *= 1.25
         
         pm = int(prix_base)
         
-        # Simulation réaliste des indicateurs Insee selon le département (ex: PACA a beaucoup de résidences secondaires)
+        # Statistiques Insee simulées de manière cohérente pour la zone
         tx_locataires = "52.7 %" if code_dept == "06" else "42.5 %"
         part_rp = "66.2 %" if code_dept == "06" else "81.0 %"
         part_rs = "23.3 %" if code_dept == "06" else "11.5 %"
@@ -52,12 +56,13 @@ def obtenir_infos_marche(nom_ville, type_propriete):
             "pop": pop, "dept": code_dept, "evo": evo_pop, "loc": tx_locataires, 
             "rp": part_rp, "rs": part_rs
         }
-    except: return None
+    except Exception as e:
+        return None
 
 st.title("📊 Assistant Immobilier National")
 o1, o2 = st.tabs(["🔍 1. Base Nationale", "🏗️ 2. Simulateur"])
 
-# Initialisation par défaut sur Nice
+# Valeurs de départ (Nice)
 if "infos" not in st.session_state:
     st.session_state["infos"] = {
         "nom": "Nice", "pm": 4850, "pb": 3300, "ph": 7200, "pop": 340000, 
@@ -67,6 +72,7 @@ if "infos" not in st.session_state:
 with o1:
     v_saisie = st.text_input("Ville :", value="Nice")
     t_bien = st.selectbox("Type :", ["Appartement", "Maison"])
+    
     if st.button("🚀 Interroger les bases"):
         res = obtenir_infos_marche(v_saisie, t_bien)
         if res: 
@@ -77,7 +83,7 @@ with o1:
     
     inf = st.session_state["infos"]
     
-    # RECRÉATION DU TABLEAU COMPLET DE VOTRE PHOTO D'ORIGINE
+    # Affichage du tableau complet
     df = pd.DataFrame({
         "Critères de Sélection": [
             "Ville / Quartier", "Prix Moyen / m²", "Prix BAS", "Prix HAUT", 
@@ -116,5 +122,5 @@ with o2:
     st.metric("💶 Marge Net d'Impôt", f"{marge:,} €")
     st.metric("📈 Profit", f"{rendement:.1f} %")
     
-    if rendimiento_operation := rendement >= 20.0: st.success("🟢 PROJET VALIDÉ (Supérieur à 20%)")
+    if rendement >= 20.0: st.success("🟢 PROJET VALIDÉ (Supérieur à 20%)")
     else: st.error("🔴 SOUS LES 20% CIBLES")
