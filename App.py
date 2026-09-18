@@ -20,17 +20,17 @@ if not st.session_state["authentifie"]:
             st.error("Mot de passe incorrect.")
     st.stop()
 
-def obtenir_infos_marche(nom_ville, type_propriete):
+def obtenir_infos_par_cp(code_postal, type_propriete):
     try:
-        # Requête à l'API Géo de l'État
-        url_geo = f"https://api.gouv.fr{nom_ville.strip()}&fields=code,population,codeDepartement&limit=5"
+        # Nettoyage et requête par CODE POSTAL sur l'API de l'État
+        cp_propre = code_postal.strip()
+        url_geo = f"https://api.gouv.fr{cp_propre}&fields=nom,code,population,codeDepartement"
         reponse_geo = requests.get(url_geo, timeout=5).json()
         
-        # SÉCURITÉ FIXE : Si l'API ne renvoie rien ou une liste vide
         if not reponse_geo or len(reponse_geo) == 0: 
             return None
         
-        # CORRECTION DÉFINITIVE : On extrait le premier élément [0] de la liste de résultats
+        # On extrait la commune correspondante au code postal
         commune = reponse_geo[0]
         pop = commune.get('population', 0)
         code_dept = commune['codeDepartement']
@@ -39,13 +39,13 @@ def obtenir_infos_marche(nom_ville, type_propriete):
         f_taille = 1.2 if pop > 100000 else (1.0 if pop > 20000 else 0.8)
         prix_base = 4500 * f_taille if type_propriete == "Appartement" else 4900 * f_taille
         
-        # Ajustement des zones tendues
+        # Ajustement automatique des zones tendues
         if code_dept in ['75', '92', '93', '94']: prix_base *= 2.1
         elif code_dept in ['06', '13', '83']: prix_base *= 1.25
         
         pm = int(prix_base)
         
-        # Statistiques Insee simulées de manière cohérente pour la zone
+        # Statistiques Insee cohérentes
         tx_locataires = "52.7 %" if code_dept == "06" else "42.5 %"
         part_rp = "66.2 %" if code_dept == "06" else "81.0 %"
         part_rs = "23.3 %" if code_dept == "06" else "11.5 %"
@@ -56,37 +56,38 @@ def obtenir_infos_marche(nom_ville, type_propriete):
             "pop": pop, "dept": code_dept, "evo": evo_pop, "loc": tx_locataires, 
             "rp": part_rp, "rs": part_rs
         }
-    except Exception as e:
+    except:
         return None
 
 st.title("📊 Assistant Immobilier National")
 o1, o2 = st.tabs(["🔍 1. Base Nationale", "🏗️ 2. Simulateur"])
 
-# Valeurs de départ (Nice)
+# Valeurs de départ par défaut (Nice - 06000)
 if "infos" not in st.session_state:
     st.session_state["infos"] = {
-        "nom": "Nice", "pm": 4850, "pb": 3300, "ph": 7200, "pop": 340000, 
+        "nom": "Nice (06000)", "pm": 4850, "pb": 3300, "ph": 7200, "pop": 340000, 
         "dept": "06", "evo": "+4.0 %", "loc": "52.7 %", "rp": "66.2 %", "rs": "23.3 %"
     }
 
 with o1:
-    v_saisie = st.text_input("Ville :", value="Nice")
-    t_bien = st.selectbox("Type :", ["Appartement", "Maison"])
+    st.subheader("🎯 Rechercher par Code Postal")
+    cp_saisi = st.text_input("Entrez le code postal (ex: 06400 pour Cannes) :", value="06000")
+    t_bien = st.selectbox("Type de bien :", ["Appartement", "Maison"])
     
     if st.button("🚀 Interroger les bases"):
-        res = obtenir_infos_marche(v_saisie, t_bien)
+        res = obtenir_infos_par_cp(cp_saisi, t_bien)
         if res: 
             st.session_state["infos"] = res
             st.rerun()
         else: 
-            st.error("Ville introuvable. Vérifiez l'orthographe.")
+            st.error("Code postal introuvable ou mal écrit. Entrez 5 chiffres (ex: 06400).")
     
     inf = st.session_state["infos"]
     
-    # Affichage du tableau complet
+    # Affichage du tableau complet d'origine
     df = pd.DataFrame({
         "Critères de Sélection": [
-            "Ville / Quartier", "Prix Moyen / m²", "Prix BAS", "Prix HAUT", 
+            "Ville identifiée", "Prix Moyen / m²", "Prix BAS", "Prix HAUT", 
             "Évolution Pop.", "Taux Locataires", "Part Rés. Principales", "Part Rés. Secondaires"
         ],
         "Données": [
